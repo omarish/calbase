@@ -629,6 +629,20 @@ def _norm_for_compare(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc).replace(second=0, microsecond=0)
 
 
+def _calendar_display_name(service, calendar_id: str) -> str:
+    """Return a human-friendly calendar label for dayfile headers."""
+    if not calendar_id.endswith("@group.calendar.google.com"):
+        return calendar_id
+    gc = _lazy_google()
+    try:
+        for cal in gc.list_calendars(service):
+            if cal.calendar_id == calendar_id and cal.summary:
+                return cal.summary
+    except Exception:  # noqa: BLE001
+        pass
+    return calendar_id
+
+
 @app.command(name="edit", help="Open day(s) in $EDITOR for git-rebase-style editing.")
 def edit_command(
     when: Annotated[
@@ -665,6 +679,7 @@ def edit_command(
     )
     events = gc.list_events(service, calendar_id, time_min, time_max)
 
+    calendar_label = _calendar_display_name(service, calendar_id)
     is_week = start_day != end_day
     if is_week:
         events_by_day: dict[date, list["Event"]] = {}
@@ -676,9 +691,9 @@ def edit_command(
             local_day = (e.start.astimezone(tz) if tz else e.start).date()
             if local_day in events_by_day:
                 events_by_day[local_day].append(e)
-        initial_text = df.render_week(events_by_day, calendar_id, tz=tz)
+        initial_text = df.render_week(events_by_day, calendar_label, tz=tz)
     else:
-        initial_text = df.render_day(events, start_day, calendar_id, tz=tz)
+        initial_text = df.render_day(events, start_day, calendar_label, tz=tz)
 
     text = initial_text
     while True:
