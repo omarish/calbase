@@ -541,44 +541,82 @@ def _echo_plan(plan: "Plan") -> None:
             typer.echo(line)
 
 
-def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
-    """Apply creates/updates/deletes via the Google Calendar API."""
-    gc = _lazy_google()
-    for op in plan.deletes:
-        gc.delete_event(service, calendar_id, op.event.id)
-
-    for op in plan.updates:
-        ev = op.event
-        line = op.parsed
-        body: dict = {}
-        if ev.title.strip() != line.title.strip():
-            body["summary"] = line.title
-        if _norm_for_compare(ev.start) != _norm_for_compare(line.start):
-            body["start"] = _format_event_time(line.start)
-        if _norm_for_compare(ev.end) != _norm_for_compare(line.end):
-            body["end"] = _format_event_time(line.end)
-        if (ev.location or "") != (line.location or ""):
-            body["location"] = line.location or ""
-        attendees_body = _attendees_patch(ev.attendees, line.invites)
-        if attendees_body is not None:
-            body["attendees"] = attendees_body
-        conf_ver: Optional[int] = None
-        if line.meet and not ev.meet:
-            body["conferenceData"] = {
-                "createRequest": {
-                    "requestId": str(uuid.uuid4()),
-                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                }
+def _build_update_patch(op) -> tuple[dict, Optional[int]]:
+    """Build (patch_body, conference_data_version) for an UpdateOp."""
+    ev = op.event
+    line = op.parsed
+    body: dict = {}
+    if ev.title.strip() != line.title.strip():
+        body["summary"] = line.title
+    if _norm_for_compare(ev.start) != _norm_for_compare(line.start):
+        body["start"] = _format_event_time(line.start)
+    if _norm_for_compare(ev.end) != _norm_for_compare(line.end):
+        body["end"] = _format_event_time(line.end)
+    if (ev.location or "") != (line.location or ""):
+        body["location"] = line.location or ""
+    attendees_body = _attendees_patch(ev.attendees, line.invites)
+    if attendees_body is not None:
+        body["attendees"] = attendees_body
+    conf_ver: Optional[int] = None
+    if line.meet and not ev.meet:
+        body["conferenceData"] = {
+            "createRequest": {
+                "requestId": str(uuid.uuid4()),
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
-            conf_ver = 1
-        if body:
+        }
+        conf_ver = 1
+    return body, conf_ver
+
+
+def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
+    """Apply creates/updates/deletes via the Google Calendar API.
+
+    When multiple operations are planned, sends them in a single HTTP batch
+    request so all changes land on Google Calendar simultaneously.
+    """
+    gc = _lazy_google()
+    update_patches = [
+        (op.event.id, *_build_update_patch(op)) for op in plan.updates
+    ]
+    update_patches = [(eid, body, cv) for eid, body, cv in update_patches if body]
+    total_ops = len(plan.deletes) + len(update_patches) + len(plan.creates)
+
+    if total_ops <= 1:
+        for op in plan.deletes:
+            gc.delete_event(service, calendar_id, op.event.id)
+        for eid, body, conf_ver in update_patches:
             if conf_ver is not None:
                 gc.update_event(
-                    service, calendar_id, ev.id, body, conference_data_version=conf_ver
+                    service, calendar_id, eid, body, conference_data_version=conf_ver
                 )
             else:
-                gc.update_event(service, calendar_id, ev.id, body)
+                gc.update_event(service, calendar_id, eid, body)
+        for op in plan.creates:
+            line = op.parsed
+            body = _build_event_body(
+                title=line.title,
+                start=line.start,
+                end=line.end,
+                location=line.location,
+                invite=line.invites,
+                meet=line.meet,
+            )
+            service.events().insert(
+                calendarId=calendar_id, body=body, conferenceDataVersion=1
+            ).execute()
+        return
 
+    requests = []
+    for op in plan.deletes:
+        requests.append(
+            service.events().delete(calendarId=calendar_id, eventId=op.event.id)
+        )
+    for eid, body, conf_ver in update_patches:
+        kwargs: dict = {"calendarId": calendar_id, "eventId": eid, "body": body}
+        if conf_ver is not None:
+            kwargs["conferenceDataVersion"] = conf_ver
+        requests.append(service.events().patch(**kwargs))
     for op in plan.creates:
         line = op.parsed
         body = _build_event_body(
@@ -589,9 +627,12 @@ def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
             invite=line.invites,
             meet=line.meet,
         )
-        service.events().insert(
-            calendarId=calendar_id, body=body, conferenceDataVersion=1
-        ).execute()
+        requests.append(
+            service.events().insert(
+                calendarId=calendar_id, body=body, conferenceDataVersion=1
+            )
+        )
+    gc.execute_batch(service, requests)
 
 
 def _attendees_patch(

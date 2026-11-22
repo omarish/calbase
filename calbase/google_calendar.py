@@ -235,3 +235,26 @@ def update_event(
 def delete_event(service, calendar_id: str, event_id: str) -> None:
     """Delete an event by id."""
     service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+
+
+def execute_batch(service, requests: list, *, chunk_size: int = 50) -> None:
+    """Execute multiple Calendar API requests together via HTTP batching.
+
+    Google Calendar accepts up to 50 requests per batch call, so changes hit
+    Google Calendar simultaneously in a single round-trip instead of trickling
+    in one by one.
+    """
+    errors: list[Exception] = []
+
+    def _callback(_request_id, _response, exception) -> None:
+        if exception is not None:
+            errors.append(exception)
+
+    for i in range(0, len(requests), chunk_size):
+        batch = service.new_batch_http_request(callback=_callback)
+        for req in requests[i : i + chunk_size]:
+            batch.add(req)
+        batch.execute()
+
+    if errors:
+        raise errors[0]

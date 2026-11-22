@@ -398,6 +398,24 @@ def test_edit_next_week_unquoted(edit_dependencies):
         assert "No changes." in result.stdout
 
 
+def test_edit_multiple_ops_uses_batch_request(edit_dependencies):
+    with patch("calbase.cli._edit_text") as mock_edit, \
+         patch("calbase.cli.typer.prompt", return_value="y"), \
+         patch("calbase.google_calendar.execute_batch") as mock_batch:
+        # Update existing Standup + create 2 new events -> 3 ops batched together.
+        mock_edit.side_effect = lambda text: (
+            text.replace("Standup", "Daily standup")
+            + "10:00-11:00  Deep work\n"
+            + "17:30-18:30  Gym\n"
+        )
+        result = invoke(["edit", "today"])
+        assert result.exit_code == 0
+        assert "Applied: 2 create(s), 1 update(s), 0 delete(s)." in result.stdout
+    mock_batch.assert_called_once()
+    _, reqs = mock_batch.call_args[0]
+    assert len(reqs) == 3
+
+
 # _format_event_time -----------------------------------------------------
 
 
