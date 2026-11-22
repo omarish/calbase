@@ -223,13 +223,19 @@ def _event_from_api(item: dict) -> Optional[Event]:
     )
 
 
-def update_event(service, calendar_id: str, event_id: str, body: dict) -> dict:
+def update_event(
+    service,
+    calendar_id: str,
+    event_id: str,
+    body: dict,
+    *,
+    conference_data_version: Optional[int] = None,
+) -> dict:
     """Patch an event with the given partial body."""
-    return (
-        service.events()
-        .patch(calendarId=calendar_id, eventId=event_id, body=body)
-        .execute()
-    )
+    kwargs: dict = {"calendarId": calendar_id, "eventId": event_id, "body": body}
+    if conference_data_version is not None:
+        kwargs["conferenceDataVersion"] = conference_data_version
+    return service.events().patch(**kwargs).execute()
 
 
 def delete_event(service, calendar_id: str, event_id: str) -> None:

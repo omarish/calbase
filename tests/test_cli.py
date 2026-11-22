@@ -380,6 +380,15 @@ def test_edit_invalid_when_errors(edit_dependencies):
     assert result.exit_code == 1
 
 
+def test_edit_next_week_unquoted(edit_dependencies):
+    edit_dependencies["list_events"].return_value = []
+    with patch("calbase.cli._edit_text") as mock_edit:
+        mock_edit.side_effect = lambda text: text
+        result = invoke(["edit", "next", "week"])
+        assert result.exit_code == 0
+        assert "No changes." in result.stdout
+
+
 # _format_event_time -----------------------------------------------------
 
 

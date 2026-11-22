@@ -366,3 +366,33 @@ def test_week_cross_day_move_via_diff() -> None:
     assert upd.parsed.start.date() == date(2026, 5, 13)
     assert plan.creates == []
     assert plan.deletes == []
+
+
+def test_long_google_ids_render_short_and_round_trip() -> None:
+    long_id_1 = "3f8k2m9p4q7r1s5t8v2w6x0y3z"
+    long_id_2 = "3f8k2m9p4q7r1s5t8v2w6x0y3z_20260507T160000Z"
+    events = [
+        _evt(long_id_1, "Standup", 9, 9, minute_end=30),
+        _evt(long_id_2, "Design review", 11, 12),
+    ]
+    text = render_day(events, ANCHOR, "cal", tz=UTC)
+    assert long_id_1 not in text
+    assert long_id_2 not in text
+    assert "# id:" in text
+
+    parsed, errors = parse_dayfile(text, ANCHOR, tz=UTC)
+    assert errors == []
+    assert len(parsed) == 2
+    assert len(parsed[0].source_id or "") == 6
+    assert parsed[0].source_id != parsed[1].source_id
+    assert diff_plan(events, parsed).is_empty()
+
+    # Edit title of second event using its short handle -> resolves back to full ID.
+    edited = text.replace("Design review", "Architecture review")
+    parsed2, errors2 = parse_dayfile(edited, ANCHOR, tz=UTC)
+    assert errors2 == []
+    plan = diff_plan(events, parsed2)
+    assert len(plan.updates) == 1
+    assert plan.updates[0].event.id == long_id_2
+    assert plan.creates == []
+    assert plan.deletes == []

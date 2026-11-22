@@ -12,6 +12,7 @@ match parsed lines back to their original events.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
@@ -88,6 +89,46 @@ _DAY_HEADER_FMT = "%A %B %-d"
 _DAY_HEADER_FULL_FMT = "%A, %B %-d, %Y"
 
 
+def _short_id_map(events: list[Event]) -> dict[str, str]:
+    """Return {event.id: display_id} with git-style short handles for long IDs.
+
+    Short IDs (<= 8 chars, e.g. in tests) are kept verbatim. Long Google
+    Calendar IDs (26-45+ chars) are shortened to a 6-char deterministic hex
+    handle (extended if needed to stay unique within the buffer).
+    """
+    ids = list(dict.fromkeys(e.id for e in events if e.id))
+    short: dict[str, str] = {}
+    used: set[str] = set()
+
+    for eid in ids:
+        if len(eid) <= 8:
+            short[eid] = eid
+            used.add(eid)
+
+    long_ids = [eid for eid in ids if len(eid) > 8]
+    if not long_ids:
+        return short
+
+    for width in range(6, 16):
+        candidate: dict[str, str] = {}
+        seen = set(used)
+        collision = False
+        for eid in long_ids:
+            h = hashlib.sha1(eid.encode("utf-8")).hexdigest()[:width]
+            if h in seen:
+                collision = True
+                break
+            seen.add(h)
+            candidate[eid] = h
+        if not collision:
+            short.update(candidate)
+            return short
+
+    for eid in long_ids:
+        short[eid] = eid
+    return short
+
+
 def render_day(
     events: list[Event],
     day: date,
@@ -104,7 +145,8 @@ def render_day(
         "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
         "",
     ]
-    body = _render_event_lines(sorted(events, key=lambda e: e.start), tz)
+    id_map = _short_id_map(events)
+    body = _render_event_lines(sorted(events, key=lambda e: e.start), tz, id_map=id_map)
     if not body:
         body = _empty_day_hint()
     return "\n".join(header + body) + "\n"
@@ -148,25 +190,32 @@ def render_week(
         "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
         "",
     ]
-    total_events = sum(len(events_by_day.get(d, [])) for d in days)
+    all_events = [e for d in days for e in events_by_day.get(d, [])]
+    id_map = _short_id_map(all_events)
+    total_events = len(all_events)
     if total_events == 0:
         out.extend(_empty_day_hint())
         out.append("")
     for d in days:
         out.append(f"# {d.strftime(_DAY_HEADER_FMT)}")
         day_events = sorted(events_by_day.get(d, []), key=lambda e: e.start)
-        out.extend(_render_event_lines(day_events, tz))
+        out.extend(_render_event_lines(day_events, tz, id_map=id_map))
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
-def _render_event_lines(events: list[Event], tz: Optional[tzinfo]) -> list[str]:
+def _render_event_lines(
+    events: list[Event],
+    tz: Optional[tzinfo],
+    *,
+    id_map: Optional[dict[str, str]] = None,
+) -> list[str]:
     """Render a list of events as aligned dayfile lines (no headers)."""
-    rendered = [_render_event_line_parts(e, tz) for e in events]
+    rendered = [_render_event_line_parts(e, tz, id_map=id_map) for e in events]
     if not rendered:
         return []
     pad_to = max(len(content) for content, _ in rendered)
-    pad_to = max(pad_to, 50)
+    pad_to = max(pad_to, 46)
     out: list[str] = []
     for content, eid in rendered:
         if eid:
@@ -177,7 +226,10 @@ def _render_event_lines(events: list[Event], tz: Optional[tzinfo]) -> list[str]:
 
 
 def _render_event_line_parts(
-    event: Event, tz: Optional[tzinfo]
+    event: Event,
+    tz: Optional[tzinfo],
+    *,
+    id_map: Optional[dict[str, str]] = None,
 ) -> tuple[str, Optional[str]]:
     """Return (content_without_id_comment, id-or-None) for a single event."""
     start_disp = _to_display(event.start, tz)
@@ -200,7 +252,8 @@ def _render_event_line_parts(
         pieces.append(f"+invite:{email}")
 
     content = f"{time_str}  {' '.join(pieces)}"
-    return content, event.id or None
+    display_id = (id_map.get(event.id, event.id) if id_map else event.id) or None
+    return content, display_id
 
 
 def _to_display(dt: datetime, tz: Optional[tzinfo]) -> datetime:
@@ -403,14 +456,16 @@ _MONTH_NUM = {
 def diff_plan(original: list[Event], parsed: list[ParsedLine]) -> Plan:
     """Compute creates/updates/deletes by matching `# id:<id>` to original events."""
     by_id: dict[str, Event] = {e.id: e for e in original}
+    for full_id, short_id in _short_id_map(original).items():
+        by_id.setdefault(short_id, by_id[full_id])
     seen: set[str] = set()
     creates: list[CreateOp] = []
     updates: list[UpdateOp] = []
 
     for line in parsed:
         if line.source_id and line.source_id in by_id:
-            seen.add(line.source_id)
             ev = by_id[line.source_id]
+            seen.add(ev.id)
             changes = _diff_event(ev, line)
             if changes:
                 updates.append(UpdateOp(event=ev, parsed=line, changes=changes))

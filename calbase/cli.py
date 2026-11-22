@@ -558,8 +558,22 @@ def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
         attendees_body = _attendees_patch(ev.attendees, line.invites)
         if attendees_body is not None:
             body["attendees"] = attendees_body
+        conf_ver: Optional[int] = None
+        if line.meet and not ev.meet:
+            body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": str(uuid.uuid4()),
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+            conf_ver = 1
         if body:
-            gc.update_event(service, calendar_id, ev.id, body)
+            if conf_ver is not None:
+                gc.update_event(
+                    service, calendar_id, ev.id, body, conference_data_version=conf_ver
+                )
+            else:
+                gc.update_event(service, calendar_id, ev.id, body)
 
     for op in plan.creates:
         line = op.parsed
@@ -614,17 +628,22 @@ def _norm_for_compare(dt: datetime) -> datetime:
 @app.command(name="edit", help="Open day(s) in $EDITOR for git-rebase-style editing.")
 def edit_command(
     when: Annotated[
-        str, typer.Argument(help="Day spec: today, yesterday, fri, week, 2026-05-10, …")
-    ] = "today",
+        Optional[list[str]],
+        typer.Argument(
+            metavar="WHEN...",
+            help="Day spec: today, yesterday, fri, week, next week, 2026-05-10, …",
+        ),
+    ] = None,
     calendar: Annotated[
         Optional[str], typer.Option("--calendar", help="Calendar id or name")
     ] = None,
 ) -> None:
+    when_str = " ".join(when) if when else "today"
     tu = _lazy_time_utils()
     df = _lazy_dayfile()
     now = datetime.now(_local_zone())
     try:
-        start_day, end_day = tu.parse_day_spec(when, now)
+        start_day, end_day = tu.parse_day_spec(when_str, now)
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
