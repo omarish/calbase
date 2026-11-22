@@ -179,7 +179,11 @@ def _get_service():
     """Authenticate and return a (paths, service) tuple."""
     gc = _lazy_google()
     paths = get_app_paths()
-    creds = gc.authenticate(paths, _resolve_credentials_path())
+    try:
+        creds = gc.authenticate(paths, _resolve_credentials_path())
+    except FileNotFoundError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     return paths, gc.build_calendar_service(creds)
 
 

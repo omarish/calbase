@@ -340,8 +340,17 @@ def test_edit_today_delete_via_missing_line(edit_dependencies):
     )
 
 
-def test_edit_user_aborts_with_n(edit_dependencies):
-    with patch("calbase.cli._edit_text") as mock_edit, \
+def test_edit_user_aborts_with_n(edit_dependencies, tmp_path):
+    from calbase import config as config_mod
+
+    fake_paths = config_mod.AppPaths(
+        base_dir=tmp_path,
+        config_path=tmp_path / "config.json",
+        token_path=tmp_path / "token.json",
+        credentials_path=tmp_path / "credentials.json",
+    )
+    with patch("calbase.cli.get_app_paths", return_value=fake_paths), \
+         patch("calbase.cli._edit_text") as mock_edit, \
          patch("calbase.cli.typer.prompt") as mock_prompt:
         mock_edit.side_effect = lambda text: text + "10:00-11:00  Throwaway\n"
         mock_prompt.return_value = "n"

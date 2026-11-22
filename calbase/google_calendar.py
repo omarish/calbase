@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from google.auth import default as google_auth_default
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -55,16 +54,11 @@ def authenticate(paths: AppPaths, credentials_path: Path) -> Credentials:
             creds = None
 
     if not credentials_path.exists():
-        try:
-            creds, _ = google_auth_default(scopes=SCOPES)
-        except Exception as exc:  # noqa: BLE001
-            raise FileNotFoundError(
-                "Missing Google OAuth credentials. "
-                f"Expected file at {credentials_path}. "
-                "Create OAuth client credentials or run "
-                "`gcloud auth application-default login`."
-            ) from exc
-        return creds
+        raise FileNotFoundError(
+            f"Missing Google OAuth credentials at {credentials_path}.\n"
+            "Download a Desktop OAuth client JSON from Google Cloud Console and save it there,\n"
+            "or set CALBASE_CREDENTIALS=/path/to/credentials.json."
+        )
 
     flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
     try:
