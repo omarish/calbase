@@ -144,6 +144,16 @@ def test_parse_when_day_prefix() -> None:
     assert rest == ["Cooking"]
 
 
+def test_parse_when_weekday_resolves_upcoming() -> None:
+    # Sun Nov 22 2026 -> "wed" is Wed Nov 25 2026
+    now = datetime(2026, 11, 22, 11, 0, tzinfo=timezone.utc)
+    tr, rest = parse_when(["wed", "3p-4p", "Coffee"], now)
+    assert tr.start.date() == date(2026, 11, 25)
+    assert tr.start.hour == 15
+    assert tr.end.hour == 16
+    assert rest == ["Coffee"]
+
+
 def test_parse_when_iso_prefix() -> None:
     now = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
     tr, rest = parse_when(["2025-02-05", "2pm-5pm", "Architecture", "review"], now)

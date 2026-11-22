@@ -164,6 +164,12 @@ def parse_when(tokens: list[str], now: datetime) -> tuple[TimeRange, list[str]]:
     if _ISO_DATE_RE.match(first) and rest and _looks_like_range(rest[0]):
         return parse_from(f"{first} {rest[0]}", now), rest[1:]
 
+    if first.lower() in _WEEKDAYS and rest and _looks_like_range(rest[0]):
+        target = _WEEKDAYS[first.lower()]
+        days_ahead = (target - now.date().weekday()) % 7
+        target_day = now.date() + timedelta(days=days_ahead)
+        return parse_from(f"{target_day.isoformat()} {rest[0]}", now), rest[1:]
+
     if first.lower() in _DAY_WORDS and rest and _looks_like_range(rest[0]):
         return parse_from(f"{first} {rest[0]}", now), rest[1:]
 
