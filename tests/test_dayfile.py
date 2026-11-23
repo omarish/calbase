@@ -86,6 +86,8 @@ def test_render_day_contains_header_and_lines() -> None:
     assert "calbase edit" in text
     assert "Thursday" in text
     assert "test@example.com" in text
+    assert "+meet" in text
+    assert "+invite:email" in text
     assert "09:00-09:30" in text
     assert "Standup" in text
     assert "# id:abc" in text
@@ -320,6 +322,8 @@ def test_render_week_groups_by_day() -> None:
     text = render_week(events_by_day, "cal", tz=UTC)
     assert "# Monday" in text
     assert "# Tuesday" in text
+    assert "+meet" in text
+    assert "+invite:email" in text
     assert "1:1 with Alex" in text
     assert "Standup" in text
 

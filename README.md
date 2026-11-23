@@ -47,6 +47,7 @@ Your editor opens with a dayfile:
 ```text
 # calbase edit — Mon May 11 – Sun May 17, 2026 (calendar: you@example.com)
 # Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.
+# Modifiers: @location (or @"multi word"), +meet, +invite:email (repeatable)
 
 # Monday May 11
 09:00-09:30  Standup                                    # id:abc123

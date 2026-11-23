@@ -129,6 +129,12 @@ def _short_id_map(events: list[Event]) -> dict[str, str]:
     return short
 
 
+_HEADER_HELP_LINES = [
+    "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
+    '# Modifiers: @location (or @"multi word"), +meet, +invite:email (repeatable)',
+]
+
+
 def render_day(
     events: list[Event],
     day: date,
@@ -142,7 +148,7 @@ def render_day(
     """
     header = [
         f"# calbase edit — {day.strftime(_DAY_HEADER_FULL_FMT)} (calendar: {calendar_summary})",
-        "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
+        *_HEADER_HELP_LINES,
         "",
     ]
     id_map = _short_id_map(events)
@@ -175,7 +181,7 @@ def render_week(
     if not days:
         header = [
             f"# calbase edit (calendar: {calendar_summary})",
-            "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
+            *_HEADER_HELP_LINES,
             "",
         ]
         return "\n".join(header) + "\n"
@@ -187,7 +193,7 @@ def render_week(
     )
     out: list[str] = [
         title_line,
-        "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
+        *_HEADER_HELP_LINES,
         "",
     ]
     all_events = [e for d in days for e in events_by_day.get(d, [])]
