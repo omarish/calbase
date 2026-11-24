@@ -88,6 +88,8 @@ def test_render_day_contains_header_and_lines() -> None:
     assert "test@example.com" in text
     assert "+meet" in text
     assert "+invite:email" in text
+    assert "+repeat:" in text
+    assert "+rrule:" in text
     assert "09:00-09:30" in text
     assert "Standup" in text
     assert "# id:abc" in text
@@ -400,3 +402,60 @@ def test_long_google_ids_render_short_and_round_trip() -> None:
     assert plan.updates[0].event.id == long_id_2
     assert plan.creates == []
     assert plan.deletes == []
+
+
+def test_parse_line_repeat_and_rrule() -> None:
+    text = (
+        "09:00-09:30  Standup +meet +repeat:weekdays\n"
+        "10:00-11:00  Board sync +rrule:FREQ=MONTHLY;BYDAY=1MO;COUNT=6\n"
+        '14:00-14:30  Check-in +rrule:"FREQ=WEEKLY;BYDAY=TU,TH"\n'
+    )
+    parsed, errors = parse_dayfile(text, ANCHOR, tz=UTC)
+    assert errors == []
+    assert len(parsed) == 3
+    assert parsed[0].title == "Standup"
+    assert parsed[0].meet is True
+    assert parsed[0].recurrence == "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+    assert parsed[1].title == "Board sync"
+    assert parsed[1].recurrence == "RRULE:FREQ=MONTHLY;BYDAY=1MO;COUNT=6"
+    assert parsed[2].title == "Check-in"
+    assert parsed[2].recurrence == "RRULE:FREQ=WEEKLY;BYDAY=TU,TH"
+
+
+def test_parse_line_recurrence_errors() -> None:
+    text = (
+        "09:00-09:30  Bad repeat +repeat:sometimes\n"
+        "10:00-10:30  Bad rrule +rrule:BYDAY=MO\n"
+        "11:00-11:30  Both +repeat:daily +rrule:FREQ=DAILY\n"
+    )
+    parsed, errors = parse_dayfile(text, ANCHOR, tz=UTC)
+    assert parsed == []
+    assert len(errors) == 3
+
+
+def test_diff_and_format_plan_with_recurrence() -> None:
+    text = "09:00-09:30  Standup +repeat:business\n"
+    parsed, errors = parse_dayfile(text, ANCHOR, tz=UTC)
+    assert errors == []
+    plan = diff_plan([], parsed)
+    assert len(plan.creates) == 1
+    assert plan.creates[0].parsed.recurrence == "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+    rendered = format_plan(plan)
+    assert "+repeat:weekdays" in rendered
+
+
+def test_round_trip_event_with_recurrence() -> None:
+    events = [
+        Event(
+            id="rec1",
+            title="Standup",
+            start=datetime(ANCHOR.year, ANCHOR.month, ANCHOR.day, 9, 0, tzinfo=UTC),
+            end=datetime(ANCHOR.year, ANCHOR.month, ANCHOR.day, 9, 30, tzinfo=UTC),
+            recurrence="RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+        )
+    ]
+    text = render_day(events, ANCHOR, "cal", tz=UTC)
+    assert "+repeat:weekdays" in text
+    parsed, errors = parse_dayfile(text, ANCHOR, tz=UTC)
+    assert errors == []
+    assert diff_plan(events, parsed).is_empty()

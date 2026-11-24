@@ -4,7 +4,7 @@ Used by `cb edit <when>` to round-trip events through `$EDITOR`. Pure functions 
 no Google API dependency, easy to unit-test.
 
 Line grammar:
-    HH:MM-HH:MM  Title [@location] [+meet] [+invite:email]  [# id:<id>]
+    HH:MM-HH:MM  Title [@location] [+meet] [+invite:email] [+repeat:spec|+rrule:rule]  [# id:<id>]
 
 The `# id:<id>` suffix is the rebase-style tracking handle used by `diff_plan` to
 match parsed lines back to their original events.
@@ -17,6 +17,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Optional
+
+from calbase.recurrence import (
+    format_recurrence_display,
+    parse_repeat,
+    parse_rrule,
+)
 
 
 # Data model -------------------------------------------------------------
@@ -34,6 +40,7 @@ class Event:
     attendees: tuple[str, ...] = ()
     meet: bool = False
     description: Optional[str] = None
+    recurrence: Optional[str] = None
 
 
 @dataclass
@@ -46,6 +53,7 @@ class ParsedLine:
     meet: bool = False
     invites: list[str] = field(default_factory=list)
     source_id: Optional[str] = None
+    recurrence: Optional[str] = None
 
 
 @dataclass
@@ -132,6 +140,7 @@ def _short_id_map(events: list[Event]) -> dict[str, str]:
 _HEADER_HELP_LINES = [
     "# Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.",
     '# Modifiers: @location (or @"multi word"), +meet, +invite:email (repeatable)',
+    "# Repeat:    +repeat:daily|weekdays|weekly|biweekly|monthly|mon,wed,fri  or  +rrule:FREQ=...",
 ]
 
 
@@ -256,6 +265,8 @@ def _render_event_line_parts(
         pieces.append("+meet")
     for email in event.attendees:
         pieces.append(f"+invite:{email}")
+    if event.recurrence:
+        pieces.append(format_recurrence_display(event.recurrence))
 
     content = f"{time_str}  {' '.join(pieces)}"
     display_id = (id_map.get(event.id, event.id) if id_map else event.id) or None
@@ -281,6 +292,9 @@ _LOC_QUOTED_RE = re.compile(r'@"([^"]+)"')
 _LOC_BARE_RE = re.compile(r'(?:^|\s)@([^\s@"]+)')
 _MEET_RE = re.compile(r"(?:^|\s)\+meet\b", re.IGNORECASE)
 _INVITE_RE = re.compile(r"(?:^|\s)\+invite:(\S+)", re.IGNORECASE)
+_REPEAT_RE = re.compile(r"(?:^|\s)\+repeat:(\S*)", re.IGNORECASE)
+_RRULE_QUOTED_RE = re.compile(r'(?:^|\s)\+rrule:"([^"]*)"', re.IGNORECASE)
+_RRULE_BARE_RE = re.compile(r"(?:^|\s)\+rrule:(\S*)", re.IGNORECASE)
 
 
 class _LineParseError(Exception):
@@ -373,6 +387,44 @@ def _parse_line(raw: str, line_no: int, day: date, tz: tzinfo) -> ParsedLine:
         invites.append(m.group(1))
         rest = (rest[: m.start()] + rest[m.end() :]).strip()
 
+    repeats: list[str] = []
+    while True:
+        m = _REPEAT_RE.search(rest)
+        if not m:
+            break
+        repeats.append(m.group(1))
+        rest = (rest[: m.start()] + rest[m.end() :]).strip()
+
+    rrules: list[str] = []
+    while True:
+        m = _RRULE_QUOTED_RE.search(rest)
+        if not m:
+            break
+        rrules.append(m.group(1))
+        rest = (rest[: m.start()] + rest[m.end() :]).strip()
+    while True:
+        m = _RRULE_BARE_RE.search(rest)
+        if not m:
+            break
+        rrules.append(m.group(1))
+        rest = (rest[: m.start()] + rest[m.end() :]).strip()
+
+    if repeats and rrules:
+        raise _LineParseError("cannot combine +repeat: and +rrule: on the same line")
+    if len(repeats) > 1:
+        raise _LineParseError("specify only one +repeat: per line")
+    if len(rrules) > 1:
+        raise _LineParseError("specify only one +rrule: per line")
+
+    recurrence: Optional[str] = None
+    try:
+        if repeats:
+            recurrence = parse_repeat(repeats[0])
+        elif rrules:
+            recurrence = parse_rrule(rrules[0])
+    except ValueError as e:
+        raise _LineParseError(str(e)) from e
+
     title = re.sub(r"\s+", " ", rest).strip()
     if not title:
         raise _LineParseError("missing title")
@@ -391,6 +443,7 @@ def _parse_line(raw: str, line_no: int, day: date, tz: tzinfo) -> ParsedLine:
         meet=meet,
         invites=invites,
         source_id=source_id,
+        recurrence=recurrence,
     )
 
 
@@ -505,6 +558,10 @@ def _diff_event(event: Event, line: ParsedLine) -> list[str]:
     new_emails = _normalize_emails(line.invites)
     if old_emails != new_emails:
         changes.append(f"attendees: {old_emails} → {new_emails}")
+    if event.recurrence != line.recurrence:
+        changes.append(
+            f"repeat: {event.recurrence or 'none'} → {line.recurrence or 'none'}"
+        )
     return changes
 
 
@@ -579,6 +636,8 @@ def format_plan(plan: Plan) -> str:
             bits.append("+meet")
         for inv in line.invites:
             bits.append(f"+invite:{inv}")
+        if line.recurrence:
+            bits.append(format_recurrence_display(line.recurrence))
         lines.append(
             f"  + create  {_fmt_range(line.start, line.end)}  {' '.join(bits)}"
         )

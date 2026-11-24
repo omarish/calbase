@@ -48,6 +48,7 @@ Your editor opens with a dayfile:
 # calbase edit — Mon May 11 – Sun May 17, 2026 (calendar: you@example.com)
 # Edit, add, delete, reorder lines. Save to apply, quit-without-saving to abort.
 # Modifiers: @location (or @"multi word"), +meet, +invite:email (repeatable)
+# Repeat:    +repeat:daily|weekdays|weekly|biweekly|monthly|mon,wed,fri  or  +rrule:FREQ=...
 
 # Monday May 11
 09:00-09:30  Standup                                    # id:abc123
@@ -120,6 +121,7 @@ Drop modifiers anywhere in the title (or use the equivalent CLI flags):
 
 ```bash
 cb fri 3p-4p Sync with Alice @office +meet +invite:alice@example.com
+cb mon 9a-9:30a Standup +meet +repeat:weekdays
 cb 1h Coffee @"Blue Bottle"
 ```
 
@@ -128,6 +130,8 @@ cb 1h Coffee @"Blue Bottle"
 | `@location` / `@"multi word"` | `--location, -l` | Set event location |
 | `+meet` | `--meet, -m` | Attach a Google Meet link |
 | `+invite:email` | `--invite, -i` (repeatable) | Invite an attendee |
+| `+repeat:<spec>` | `--repeat, -r` | Repeat (`daily`, `weekdays`/`business`/`mon-fri`, `weekends`, `weekly`, `biweekly`, `monthly`, `yearly`, `mon,wed,fri`, `2w`, …) |
+| `+rrule:<rule>` | `--rrule` | Raw RFC 5545 `RRULE` (e.g. `+rrule:"FREQ=MONTHLY;BYDAY=1MO;COUNT=6"`) |
 | — | `--description` / `-e` | Add description (or open `$EDITOR`) |
 | — | `--calendar <id-or-name>` | Target a specific calendar |
 

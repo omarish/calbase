@@ -178,6 +178,53 @@ def test_capture_postfix_invite_extracted(mock_dependencies):
     assert body["attendees"] == [{"email": "alice@x.com"}]
 
 
+def test_capture_postfix_repeat_weekdays(mock_dependencies):
+    result = invoke(["9a-9:30a", "Standup", "+meet", "+repeat:weekdays"])
+    assert result.exit_code == 0
+    body = mock_dependencies["service"].events().insert.call_args[1]["body"]
+    assert body["summary"] == "Standup"
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+
+
+def test_capture_postfix_repeat_business_days(mock_dependencies):
+    result = invoke(["9a-9:30a", "Standup", "+repeat:business"])
+    assert result.exit_code == 0
+    body = mock_dependencies["service"].events().insert.call_args[1]["body"]
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+
+
+def test_capture_repeat_flag(mock_dependencies):
+    result = invoke(["9a-10a", "Sync", "-r", "mon,wed,fri"])
+    assert result.exit_code == 0
+    body = mock_dependencies["service"].events().insert.call_args[1]["body"]
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]
+
+
+def test_capture_postfix_rrule(mock_dependencies):
+    result = invoke(["9a-10a", "Board", "+rrule:FREQ=MONTHLY;BYDAY=1MO;COUNT=6"])
+    assert result.exit_code == 0
+    body = mock_dependencies["service"].events().insert.call_args[1]["body"]
+    assert body["summary"] == "Board"
+    assert body["recurrence"] == ["RRULE:FREQ=MONTHLY;BYDAY=1MO;COUNT=6"]
+
+
+def test_capture_rrule_flag(mock_dependencies):
+    result = invoke(["9a-10a", "Board", "--rrule", "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU"])
+    assert result.exit_code == 0
+    body = mock_dependencies["service"].events().insert.call_args[1]["body"]
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU"]
+
+
+def test_capture_repeat_and_rrule_conflict_errors(mock_dependencies):
+    result = invoke(["9a-10a", "Sync", "+repeat:daily", "+rrule:FREQ=DAILY"])
+    assert result.exit_code == 1
+
+
+def test_capture_invalid_repeat_errors(mock_dependencies):
+    result = invoke(["9a-10a", "Sync", "+repeat:bogus"])
+    assert result.exit_code == 1
+
+
 def test_capture_bad_when_token_errors_with_examples(mock_dependencies):
     result = invoke(["banana", "Title"])
     assert result.exit_code == 1
@@ -248,6 +295,63 @@ def test_edit_today_mutation_creates_new_event(edit_dependencies):
         call.kwargs.get("body", {}).get("summary") == "New event"
         for call in insert_calls
     )
+
+
+def test_edit_today_creates_recurring_event(edit_dependencies):
+    """Adding a line with `+repeat:weekdays` sends `recurrence` to insert()."""
+    with patch("calbase.cli._edit_text") as mock_edit, \
+         patch("calbase.cli.typer.prompt") as mock_prompt:
+        mock_edit.side_effect = (
+            lambda text: text + "10:00-10:30  Team check-in +repeat:weekdays\n"
+        )
+        mock_prompt.return_value = "Y"
+        result = invoke(["edit", "today"])
+        assert result.exit_code == 0
+    insert_calls = edit_dependencies["service"].events().insert.call_args_list
+    assert any(
+        call.kwargs.get("body", {}).get("recurrence")
+        == ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+        for call in insert_calls
+    )
+
+
+def test_edit_today_creates_event_with_rrule(edit_dependencies):
+    """Adding a line with `+rrule:` sends the normalized RRULE to insert()."""
+    with patch("calbase.cli._edit_text") as mock_edit, \
+         patch("calbase.cli.typer.prompt") as mock_prompt:
+        mock_edit.side_effect = (
+            lambda text: text + "11:00-12:00  Monthly retro +rrule:FREQ=MONTHLY;BYDAY=1MO\n"
+        )
+        mock_prompt.return_value = "Y"
+        result = invoke(["edit", "today"])
+        assert result.exit_code == 0
+    insert_calls = edit_dependencies["service"].events().insert.call_args_list
+    assert any(
+        call.kwargs.get("body", {}).get("recurrence")
+        == ["RRULE:FREQ=MONTHLY;BYDAY=1MO"]
+        for call in insert_calls
+    )
+
+
+def test_edit_today_repeat_added_to_existing_patches_recurrence(edit_dependencies):
+    with patch("calbase.cli._edit_text") as mock_edit, \
+         patch("calbase.cli.typer.prompt") as mock_prompt:
+        def add_repeat(text: str) -> str:
+            out_lines = []
+            for line in text.splitlines():
+                if line.lstrip().startswith("09:00-09:30") and "# id:abc" in line:
+                    head, _, tail = line.partition("# id:abc")
+                    line = f"{head.rstrip()} +repeat:mon-fri  # id:abc{tail}"
+                out_lines.append(line)
+            return "\n".join(out_lines) + "\n"
+
+        mock_edit.side_effect = add_repeat
+        mock_prompt.return_value = "y"
+        result = invoke(["edit", "today"])
+        assert result.exit_code == 0
+    edit_dependencies["update_event"].assert_called_once()
+    _, _, _, body = edit_dependencies["update_event"].call_args[0]
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
 
 
 def test_edit_today_invite_added_syncs_to_google(edit_dependencies):

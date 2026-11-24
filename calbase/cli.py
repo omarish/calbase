@@ -245,6 +245,7 @@ def _build_event_body(
     description: Optional[str] = None,
     invite: Optional[list[str]] = None,
     meet: bool = False,
+    recurrence: Optional[str] = None,
 ) -> dict:
     body: dict = {
         "summary": title,
@@ -271,6 +272,8 @@ def _build_event_body(
                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
         }
+    if recurrence:
+        body["recurrence"] = [recurrence]
     return body
 
 
@@ -280,14 +283,20 @@ def _extract_postfix_modifiers(
     location: Optional[str],
     invite: Optional[list[str]],
     meet: bool,
-) -> tuple[str, Optional[str], list[str], bool]:
-    """Pull `@location`, `+meet`, `+invite:email` out of title tokens.
+    repeat: Optional[str] = None,
+    rrule: Optional[str] = None,
+) -> tuple[str, Optional[str], list[str], bool, Optional[str]]:
+    """Pull `@location`, `+meet`, `+invite:email`, `+repeat:`, `+rrule:` out of title tokens.
 
     Explicit flag values take precedence; postfix tokens are merged in.
     """
+    from calbase.recurrence import parse_repeat, parse_rrule
+
     invites = list(invite or [])
     title_parts: list[str] = []
     quoted_loc_buffer: Optional[list[str]] = None
+    inline_repeats: list[str] = []
+    inline_rrules: list[str] = []
 
     for tok in title_tokens:
         # Multi-word quoted location handling: `@"office park"` or split tokens
@@ -317,11 +326,32 @@ def _extract_postfix_modifiers(
         if tok.lower().startswith("+invite:") and len(tok) > len("+invite:"):
             invites.append(tok[len("+invite:") :])
             continue
+        if tok.lower().startswith("+repeat:"):
+            inline_repeats.append(tok[len("+repeat:") :])
+            continue
+        if tok.lower().startswith("+rrule:"):
+            inline_rrules.append(tok[len("+rrule:") :])
+            continue
 
         title_parts.append(tok)
 
+    all_repeats = ([repeat] if repeat is not None else []) + inline_repeats
+    all_rrules = ([rrule] if rrule is not None else []) + inline_rrules
+    if all_repeats and all_rrules:
+        raise ValueError("Cannot specify both +repeat/--repeat and +rrule/--rrule.")
+    if len(all_repeats) > 1:
+        raise ValueError("Specify only one +repeat/--repeat per event.")
+    if len(all_rrules) > 1:
+        raise ValueError("Specify only one +rrule/--rrule per event.")
+
+    recurrence: Optional[str] = None
+    if all_repeats:
+        recurrence = parse_repeat(all_repeats[0])
+    elif all_rrules:
+        recurrence = parse_rrule(all_rrules[0])
+
     title = " ".join(title_parts).strip()
-    return title, location, invites, meet
+    return title, location, invites, meet, recurrence
 
 
 # Capture flow (default callback) ----------------------------------------
@@ -336,6 +366,8 @@ def _do_capture(
     meet: bool,
     description: Optional[str],
     edit_description: bool,
+    repeat: Optional[str] = None,
+    rrule: Optional[str] = None,
 ) -> None:
     tu = _lazy_time_utils()
     now = datetime.now(_local_zone())
@@ -353,9 +385,18 @@ def _do_capture(
         )
         raise typer.Exit(code=1)
 
-    title, location, invites, meet = _extract_postfix_modifiers(
-        title_tokens, location=location, invite=invite, meet=meet
-    )
+    try:
+        title, location, invites, meet, recurrence = _extract_postfix_modifiers(
+            title_tokens,
+            location=location,
+            invite=invite,
+            meet=meet,
+            repeat=repeat,
+            rrule=rrule,
+        )
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
 
     if not title:
         typer.echo("Error: missing title.", err=True)
@@ -381,6 +422,7 @@ def _do_capture(
         description=final_description,
         invite=invites,
         meet=meet,
+        recurrence=recurrence,
     )
 
     created = (
@@ -459,6 +501,21 @@ def capture_command(
             "--edit-description", "-e", help="Open $EDITOR to write description"
         ),
     ] = False,
+    repeat: Annotated[
+        Optional[str],
+        typer.Option(
+            "--repeat",
+            "-r",
+            help="Recurrence shorthand (e.g. daily, weekdays, weekly, mon,wed,fri, 2w)",
+        ),
+    ] = None,
+    rrule: Annotated[
+        Optional[str],
+        typer.Option(
+            "--rrule",
+            help="Raw RFC 5545 RRULE (e.g. FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR)",
+        ),
+    ] = None,
 ) -> None:
     _do_capture(
         list(args),
@@ -468,6 +525,8 @@ def capture_command(
         meet=meet,
         description=description,
         edit_description=edit_description,
+        repeat=repeat,
+        rrule=rrule,
     )
 
 
@@ -566,6 +625,8 @@ def _build_update_patch(op) -> tuple[dict, Optional[int]]:
             }
         }
         conf_ver = 1
+    if ev.recurrence != line.recurrence:
+        body["recurrence"] = [line.recurrence] if line.recurrence else []
     return body, conf_ver
 
 
@@ -601,6 +662,7 @@ def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
                 location=line.location,
                 invite=line.invites,
                 meet=line.meet,
+                recurrence=line.recurrence,
             )
             service.events().insert(
                 calendarId=calendar_id, body=body, conferenceDataVersion=1
@@ -626,6 +688,7 @@ def _apply_plan(service, calendar_id: str, plan: "Plan") -> None:
             location=line.location,
             invite=line.invites,
             meet=line.meet,
+            recurrence=line.recurrence,
         )
         requests.append(
             service.events().insert(
